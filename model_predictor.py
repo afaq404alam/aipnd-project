@@ -25,20 +25,20 @@ class ModelPredictor:
         model_name = checkpoint['name']
 
         model = models.__dict__[model_name](pretrained = True)
+
+        #turning off tuning of the model
+        for param in model.parameters(): 
+            param.requires_grad = False
             
         model.classifier = checkpoint['classifier']
         model.class_to_idx = checkpoint['mapping']
         
         model.load_state_dict(checkpoint['state_dict'])
         
-        #turning off tuning of the model
-        for param in model.parameters(): 
-            param.requires_grad = False 
-        
         return model
 
-    def get_cat_to_name_map(self, cat_to_name_file_path: str):
-        with open('cat_to_name.json', 'r') as f:
+    def get_cat_to_name_map(self):
+        with open(self.category_names, 'r') as f:
             return json.load(f)
 
     def preprocess_image(self):
@@ -58,10 +58,25 @@ class ModelPredictor:
         model.to(self._device)
 
         preprocessed_img = self.preprocess_image()
+        preprocessed_img = preprocessed_img.unsqueeze_(0)
+        preprocessed_img = preprocessed_img.float()
         preprocessed_img.to(self._device)
 
-        output = model(preprocessed_img)
 
-        probs = F.softmax(output.data, dim=1)
 
-        return probs.topk(self.top_k)
+        with torch.no_grad():
+            output = model(preprocessed_img)
+
+        probs, classes = F.softmax(output.data, dim=1).topk(self.top_k)
+
+        probs_classes = zip(probs.tolist()[0], classes.tolist()[0])
+
+        cat_to_names = None
+        if self.category_names:
+            cat_to_names = self.get_cat_to_name_map()
+
+        inv_map = {v: k for k, v in model.class_to_idx.items()}
+        if cat_to_names:
+            return [{"probability": prob, "class_id": inv_map[klass], "class_name": cat_to_names[inv_map[klass]]} for prob, klass in probs_classes]
+        else:
+            return [{"probability": prob, "class_id": inv_map[klass]} for prob, klass in probs_classes]
